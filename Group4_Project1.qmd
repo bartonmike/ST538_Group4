@@ -1,0 +1,76 @@
+---
+title: "Group 4 Project 1: Group Proposal"
+author: Paul Anderson, Michael Barton, Kevin Kincade
+format: pdf
+---
+
+```{r}
+#| label: install-deps
+#| include: false
+reticulate::virtualenv_create("r-reticulate")
+reticulate::virtualenv_install("r-reticulate", c("requests", "pandas"))
+```
+
+```{r}
+#| label: install-deps
+#| include: false
+file.edit("~/.Rprofile")
+# add in this 
+# Sys.setenv(RETICULATE_PYTHON_ENV = "r-reticulate")
+```
+
+
+```{python}
+#| label: check-python
+import sys
+print(sys.executable)
+print(sys.version)
+```
+
+```{python}
+#| label: fetch-pums
+#| echo: false        # hide code in output, remove if you want it shown
+#| cache: true        # cache the chunk so it doesn't re-run on every render
+
+import requests
+import pandas as pd
+
+API_KEY = "a8f34453c39e419470f405353250f662a508d821"
+YEAR = 2024
+STATE = "41"
+
+# Example: pull age, sex, income, and employment status
+variables = [
+    # Outcomes
+    "WAGP", "PINCP", "PERNP", "POVPIP", "HICOV", "ESR",
+    # Core demographics
+    "AGEP", "SEX", "RAC1P", "HISP", "CIT", "NATIVITY", "YOEP", "MAR", "RELSHIPP",
+    # Education
+    "SCHL", "FOD1P", "SCHG", "SCH",
+    # Labor market
+    "COW", "WKHP", "WKW", "NAICSP", "OCCP", "WRK", "JWTRNS", "JWMNP",
+    # Geography
+    "ST", "PUMA", "MIG", "MIGSP", "POWSP",
+    # Disability & health
+    "DIS", "DPHY", "DREM", "DEAR", "DEYE",
+    # Household context
+    "HINCP", "HHT", "NRC", "PAOC", "TEN", "VEH",
+    # Income components
+    "RETP", "SSP", "SSIP", "PAP", "SEMP",
+    # Weights & adjustments
+    "PWGTP", "ADJINC"
+    ]  # PWGTP = person weight
+
+url = (
+    f"https://api.census.gov/data/{YEAR}/acs/acs5/pums"
+    f"?get={','.join(variables)}"
+    f"&for=state:{STATE}"
+    f"&key={API_KEY}"
+)
+
+response = requests.get(url, timeout=60)
+response.raise_for_status()
+
+data = response.json()
+pums = pd.DataFrame(data[1:], columns=data[0])
+```

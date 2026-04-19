@@ -501,4 +501,13 @@ Despite these significant relationships, the overall explanatory power of the mo
 2. Mason, H., & Wiggins, C. (2010). A Taxonomy of Data Science. (Archived manuscript / teaching document). Accessed on 4/10/2026 https://introdatasci.dlilab.com/pdf/A_Taxonomy_of_Data_Science.pdf
 
 ## Appendix
-This is a code document (QMD). Please see qmd for all code chunks used to create this document.
+
+```{r appendix-collect, include=FALSE}
+all_chunks <- setdiff(knitr::all_labels(), c("appendix-collect", "appendix"))
+```
+
+```{r appendix, ref.label=all_chunks}
+#| echo: true
+#| eval: false
+
+```

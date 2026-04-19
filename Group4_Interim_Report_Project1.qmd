@@ -4,10 +4,23 @@ author: Paul Anderson, Michael Barton, Kevin Kincaid
 format: pdf
 ---
 
-```{r include: false}
+```{r}
+#| label: document settings
+#| include: false
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE)
+```
+
+```{r}
+#| label: load in packages
+#| include: false
 library(tidyverse)
 ```
 
+## Introduction: Can income be predicted from selected ACS Data
+
+In this interim report, we use individual-level data for Oregon residents from the 2020–2024 American Community Survey (ACS) 5-year Public Use Microdata Sample (1). Exploratory analyses were conducted to evaluate each proposed research question, leading us to focus on the question, “What factors are most impactful in predicting income?” Exploratory analysis is used to assess the distribution of income and its relationships with key demographic and socioeconomic variables. Based on the observed patterns, a full multiple linear regression model is specified, and ANOVA-based comparisons are used to identify an appropriate reduced model and evaluate its performance. We then discuss model justification and potential next steps.
 
 ```{r}
 #| label: install-deps
@@ -33,7 +46,7 @@ library(tidyverse)
 
 ```{python}
 #| label: fetch-metadata
-#| echo: false
+#| include: false # removed from our output
 #| cache: false
 
 import requests
@@ -80,13 +93,12 @@ else:
 print(json.dumps(metadata.get("WAGP", {}), indent=2))
 ```
 
-
-
 ```{python}
-# Scrub
 #| label: fetch-pums
-#| echo: false
+#| include: false
 #| cache: false
+
+# --- Scrub Start ---
 
 import requests
 import pandas as pd
@@ -145,7 +157,7 @@ else:
 
 ```{r}
 #| label: load-pums
-#| echo: false
+#| include: false
 
 pums <- read_csv("data/pums_oregon_2024.csv", show_col_types = FALSE)
 
@@ -156,8 +168,6 @@ pums <- read_csv("data/pums_oregon_2024.csv", show_col_types = FALSE)
 #| label: scrub-pums
 #| echo: false
 #| cache: true
-
-library(tidyverse)
 
 pums_clean <- pums |>
 
@@ -296,6 +306,12 @@ pums_clean <- pums |>
 #| label: eda-overview
 #| echo: false
 
+# --- Note ---
+# after data pull and scrub in Python from the API
+# the following was a proposed EDA method
+# the group did chose to work in a different direction for EDA
+# we have left if here for possible future use
+
 library(tidyverse)
 library(skimr)
 
@@ -344,23 +360,25 @@ library(skimr)
 #| label: eda-correlations
 #| echo: false
 
+# --- End EDA proposal ---
+
 library(corrr)
 ```
 
-After our initial proposal, we did exploratory analysis for each question. We decided to pursue question 1, which was “What factors are most impactful when predicting income?”. The process was to develop a full model and then run ANOVA to determine a viable reduced model. 
-
-## Can income be predicted from selected ACS Data
-
-### Exploratory Data Analysis
+## Exploratory Data Analysis
 
 We begin by exploring the relationship between income and our key predictors: age, education, gender, race, location and number of household members. 
 
 ```{r}
+#| label: eda-histograms
+#| echo: false
 hist(pums_clean$PINCP)
 hist(log(pums_clean$PINCP))
 ```
 
 ```{r}
+#| label: eda-incomevage
+#| echo: false
 ggplot(pums_clean, aes(x = AGEP, y = PINCP)) +
   geom_point(alpha = 0.2) +
   geom_smooth(method = "loess") +
@@ -370,6 +388,8 @@ ggplot(pums_clean, aes(x = AGEP, y = PINCP)) +
 The above summary statistics indicate that income (PINCP) is highly right-skewed, with a small number of individuals earning substantially more than the median. Because of this skewness, we will consider applying a log transformation to the income response when evaluating model fit for the final report. The scatterplot of income versus age suggests a nonlinear relationship: income tends to increase with age early in life, plateau in middle age, and decline slightly at older ages. This pattern suggests the inclusion of a quadratic age term in the regression model.
 
 ```{r}
+#| label: eda-incomeved
+#| echo: false
 ggplot(pums_clean, aes(x = SCHL, y = PINCP)) +
   geom_point(alpha = 0.2) +
   geom_smooth(method = "loess") +
@@ -378,6 +398,8 @@ ggplot(pums_clean, aes(x = SCHL, y = PINCP)) +
 ```
 
 ```{r}
+#| label: eda-incomevgender
+#| echo: false
 ggplot(pums_clean, aes(x = factor(SEX), y = PINCP)) +
   geom_boxplot() +
   coord_cartesian(ylim = c(0, 200000)) +
@@ -391,6 +413,8 @@ ggplot(pums_clean, aes(x = factor(SEX), y = PINCP)) +
 ```
 
 ```{r}
+#| label: eda-incomevrace
+#| echo: false
 ggplot(pums_clean, aes(x = factor(RAC1P), y = PINCP)) +
   geom_boxplot() +
   coord_cartesian(ylim = c(0, 200000)) +
@@ -403,54 +427,46 @@ ggplot(pums_clean, aes(x = factor(RAC1P), y = PINCP)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-
 As shown above, education shows a strong positive association with income, with higher educational attainment corresponding to higher earnings. Boxplots of income by gender and race reveal noticeable differences in median income across groups, suggesting these variables should be included as categorical predictors. Overall, the exploratory analysis indicates that income is associated with multiple demographic and socioeconomic variables, and that nonlinear effects (particularly for age) may be important.Overall, the exploratory analysis indicates that income is associated with multiple demographic and socioeconomic variables, and that nonlinear effects (particularly for age) may be important.
 
-```{r}
-
-```
-
-
-### Preliminary Models
+## Modeling: Preliminary Models
 
 Based on our analysis of the data, we fit multiple linear regression models to assess how well income can be predicted from the selected variables. The initial full model is:
-
 
 Income∼Age+Age^2+Education+Gender+Race+Birthplace+Household members
 
 ```{r}
+#| label: model-1-2-3
+#| echo: false
 # Urban/Rural is hard to codify in the data, so it may be best to not include it.
+
+library(car)
+
 model1 <- lm(PINCP~AGEP+I(AGEP^2)+SCHL+factor(SEX)+factor(RAC1P)+factor(POBP_binary) + NP, data=pums_clean)
 summary(model1)
-
 
 model2 <- lm(PINCP~AGEP+AGEP^2+SCHL+factor(SEX)+factor(RAC1P), data=pums_clean)
 summary(model2)
 
-library(car)
 vif(model1)
-
 
 model3 <- lm(PINCP~AGEP+SCHL+factor(SEX)+factor(RAC1P), data=pums_clean)
 summary(model2)
 
 anova(model2, model3)
-
 ```
-
-
-
 
 Income is modeled as a continuous response, and predictors include both continuous variables (age, education, household members) and categorical variables (gender, race, birthplace). A quadratic term for age is included to capture the nonlinear relationship observed in the exploratory analysis.
 
 A reduced model excluding birthplace and household members is also considered due to weak initial evidence of its importance:
 
-
 Income∼Age+Age^2+Education+Gender+Race
 
-### Model Checking and Selection
+## Model Checking and Selection
 
 ```{r}
+#| label: model-plots
+#| echo: false
 plot(model2, which = 1)
 plot(model2, which = 2)
 
@@ -459,7 +475,6 @@ plot(model2, which = 2)
 #lot(model_log, which = 1)
 #plot(model_log, which = 2)
 ```
-
 
 Model diagnostics were conducted to assess the validity of the linear regression assumptions. Residual plots indicated non-constant variance and right-skewness, which is consistent with the skewed distribution of income. This suggests that a log transformation of income may improve model fit, although the untransformed model is retained for interpretability.
 
@@ -472,7 +487,7 @@ The final selected model is:
 
 Income∼Age+Age^2+Education+Gender+Race
 
-### Conclusions
+## Conclusions
 
 Our analysis shows that income can be partially predicted using age, education, gender, and race. Education is the strongest predictor, with higher levels of education associated with substantially higher income. Age has a nonlinear relationship with income, with earnings increasing early in life, peaking in mid-career, and declining slightly thereafter. Gender and race also show statistically significant associations with income, even after controlling for other variables.
 
@@ -486,3 +501,4 @@ Despite these significant relationships, the overall explanatory power of the mo
 2. Mason, H., & Wiggins, C. (2010). A Taxonomy of Data Science. (Archived manuscript / teaching document). Accessed on 4/10/2026 https://introdatasci.dlilab.com/pdf/A_Taxonomy_of_Data_Science.pdf
 
 ## Appendix
+This is a code document (QMD). Please see qmd for all code chunks used to create this document.

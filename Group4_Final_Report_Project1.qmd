@@ -28,6 +28,7 @@ library(glmnet)
 library(faraway)
 library(car)
 library(gt)
+library(scales)
 ```
 
 ## Introduction
@@ -802,7 +803,7 @@ The above graphs compare commute time and income but separated by mode of transp
  outfile <- "./q3-incomebyarea-plot.png"
 
 if (!file.exists(outfile)) {
-  ggplot(pums_true, aes(x = factor(PUMA), y = PINCP)) +
+  incomebyarea_plot <- ggplot(pums_true, aes(x = factor(PUMA), y = PINCP)) +
   geom_boxplot() +
   coord_cartesian(ylim = c(0, 100000)) +
   labs(

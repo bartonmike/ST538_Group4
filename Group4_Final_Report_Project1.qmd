@@ -319,7 +319,7 @@ pums_clean <- pums |>
 
 ```{r}
 #| label: eda-overview
-#| echo: false
+#| include: false
 
 # --- Note ---
 # after data pull and scrub in Python from the API
@@ -336,12 +336,12 @@ library(skimr)
 
 ```{r}
 #| label: eda-missingness
-#| echo: false
+#| include: false
 ```
 
 ```{r}
 #| label: eda-income-distributions
-#| echo: false
+#| include: false
 
 # Wages among earners only
 
@@ -352,7 +352,7 @@ library(skimr)
 
 ```{r}
 #| label: eda-outcome-summaries
-#| echo: false
+#| include: false
 
 # Q1/Q3: wage statistics by key groups
 
@@ -363,17 +363,17 @@ library(skimr)
 
 ```{r}
 #| label: eda-categorical-distributions
-#| echo: false
+#| include: false
 ```
 
 ```{r}
 #| label: eda-continuous-distributions
-#| echo: false
+#| include: false
 ```
 
 ```{r}
 #| label: eda-correlations
-#| echo: false
+#| include: false
 
 # --- End EDA proposal ---
 
@@ -382,7 +382,7 @@ library(corrr)
 
 ## Question 1: Can income be predicted from selected census variables?
 
-## Exploratory Data Analysis
+## Exploratory Data Analysis: Question 1
 
 We begin by exploring the relationship between income and a few key predictors: age, education, gender, race, place of birth and number of household members.
 
@@ -500,6 +500,237 @@ ggsave("./eda-incomevrace-plot.png", width = 10, height = 6, dpi = 300)
 ```
 
 attainment corresponding to higher earnings. Boxplots of income by gender and race reveal differences in median income across groups, supporting their inclusion as categorical predictors. Overall, the exploratory analysis suggests that income is influenced by multiple demographic and socioeconomic factors, and that nonlinear effects, particularly for age, should be incorporated into the model.
+
+## Exploratory Data Analysis: Question 2
+We use the full Oregon sample from pums_clean (all ages and labor force statuses) to capture coverage gaps among non-citizens, including those outside the workforce. After dropping missing values for insurance (HICOV), income (POVPIP), and citizenship (CIT), the final sample includes 197,991 residents.
+
+The outcome is being uninsured (1 = uninsured, 0 = insured). Income is measured with POVPIP (percent of the poverty line), aligning with Medicaid and ACA thresholds. Education (SCHL) is grouped into six levels, and employment (ESR_group) into five categories to separate labor force from citizenship effects. Household size (NP), full citizenship categories (CIT), and controls for age, race, and Hispanic origin are also included.
+
+The exploratory analysis reveals a stark and consistent coverage gap by citizenship status. Non-citizens in Oregon are uninsured at roughly 26% — about 21 percentage points higher than US-born residents, whose rate sits between 4–9% across all citizen categories (Figure 1). Income matters: uninsured residents are concentrated below 200% of the poverty line, and POVPIP clearly tracks coverage status (Figure 2). But income tells only part of the story — uninsured individuals appear at every income level, particularly in the 200–400% range, suggesting other forces are at work. Figure 3 makes this plain. Even among the employed, where employer-sponsored coverage is most accessible, non-citizens are uninsured at ~27% compared to ~6% for US-born workers — a gap of over 20 percentage points within the same employment category. Unemployed non-citizens face compounding disadvantage at ~42%, excluded simultaneously from employer coverage and from many public programs available to citizens in identical economic circumstances. The pattern holds across income levels, employment groups, and labor force status: citizenship status appears to independently shape access to health insurance in Oregon, over and above socioeconomic position. The regression models that follow test whether this gap persists after controlling for income, education, employment, household size, age, race, and Hispanic origin.
+
+```{r}
+#| label: q2-occp-lookup
+#| include: false
+#| cache: true
+
+# build OCCP group lookup on distinct codes only
+occp_groups <- pums_clean |>
+  filter(OCCP != "N", !is.na(OCCP)) |>
+  distinct(OCCP) |>
+  mutate(
+    OCCP_group = case_when(
+      between(suppressWarnings(as.numeric(OCCP)), 10,   960)  ~ "High coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 1005, 2555) ~ "High coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 3000, 3550) ~ "High coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 2600, 2920) ~ "Variable coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 3600, 3655) ~ "Variable coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 4330, 5940) ~ "Variable coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 4000, 4255) ~ "Low coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 6005, 6130) ~ "Low coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 6200, 8990) ~ "Low coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 9005, 9760) ~ "Low coverage",
+      between(suppressWarnings(as.numeric(OCCP)), 3700, 3960) ~ "Military & Protective",
+      between(suppressWarnings(as.numeric(OCCP)), 9800, 9830) ~ "Military & Protective",
+      TRUE                                                     ~ "Variable coverage"
+    ),
+    OCCP_group = factor(OCCP_group,
+                        levels = c("High coverage", "Variable coverage",
+                                   "Low coverage", "Military & Protective"))
+  )
+
+# check
+cat("Distinct OCCP codes mapped:", nrow(occp_groups), "\n")
+count(occp_groups, OCCP_group)
+```
+```{r}
+#| label: q2-prep
+#| include: false
+#| cache: false
+
+pums_q2 <- pums_clean |>
+  left_join(occp_groups, by = "OCCP") |>
+  mutate(
+    # response: uninsured
+    UNINSURED = as.integer(!HICOV),
+
+    # education collapsed to degree attainment groups
+    SCHL_group = case_when(
+      SCHL <= 15           ~ "Less than high school",
+      SCHL %in% c(16, 17) ~ "High school or GED",
+      SCHL %in% c(18, 19) ~ "Some college",
+      SCHL == 20           ~ "Associate's degree",
+      SCHL == 21           ~ "Bachelor's degree",
+      SCHL >= 22           ~ "Graduate degree"
+    ),
+    SCHL_group = factor(SCHL_group,
+                        levels = c("Less than high school", "High school or GED",
+                                   "Some college", "Associate's degree",
+                                   "Bachelor's degree", "Graduate degree")),
+
+    # employment status collapsed
+    # separates labor force status from citizenship for cleaner interpretation
+    ESR_group = case_when(
+      is.na(ESR)                                          ~ "Under 16",
+      ESR == "Civilian employed at work"                  ~ "Employed",
+      ESR == "Civilian employed not at work"              ~ "Employed",
+      ESR == "Unemployed"                                 ~ "Unemployed",
+      ESR %in% c("Armed Forces at work",
+                 "Armed Forces not at work")              ~ "Armed Forces",
+      ESR == "Not in labor force"                         ~ "Not in labor force"
+    ),
+    ESR_group = factor(ESR_group,
+                       levels = c("Employed", "Unemployed",
+                                  "Not in labor force", "Armed Forces",
+                                  "Under 16")),
+
+    # age groups for descriptive EDA
+    AGE_group = case_when(
+      AGEP < 18              ~ "Under 18",
+      between(AGEP, 18, 25)  ~ "18-25",
+      between(AGEP, 26, 34)  ~ "26-34",
+      between(AGEP, 35, 44)  ~ "35-44",
+      between(AGEP, 45, 54)  ~ "45-54",
+      between(AGEP, 55, 64)  ~ "55-64",
+      AGEP >= 65             ~ "65+"
+    ),
+    AGE_group = factor(AGE_group,
+                       levels = c("Under 18", "18-25", "26-34", "35-44",
+                                  "45-54", "55-64", "65+"))
+  ) |>
+  filter(!is.na(HICOV), !is.na(POVPIP), !is.na(CIT))
+
+cat("Q2 analytic sample:", nrow(pums_q2), "residents\n")
+cat("Unweighted uninsured rate:",
+    round(mean(pums_q2$UNINSURED) * 100, 1), "%\n")
+```
+```{r}
+#| label: q2-survey-design
+#| include: false
+#| cache: false
+
+# define survey design
+svy_q2 <- svydesign(
+  ids     = ~PUMA,
+  weights = ~PWGTP,
+  data    = pums_q2,
+  nest    = TRUE
+)
+
+cat("Weighted population uninsured rate:",
+    round(svymean(~UNINSURED, svy_q2)[[1]] * 100, 1), "%\n\n")
+```
+```{r}
+#| label: q2-theme-setup
+#| echo: false
+#| cache: false
+
+library(ggplot2)
+library(dplyr)
+library(stringr)
+
+q2_theme <- theme_classic() +
+  theme(
+    plot.title    = element_text(size = 12, face = "bold"),
+    plot.subtitle = element_text(size = 9, color = "gray40"),
+    axis.text.y   = element_text(size = 8),
+    axis.text.x   = element_text(size = 8),
+    plot.margin   = margin(10, 30, 10, 10)
+  )
+```
+```{r}
+#| label: q2-eda-citizenship
+#| echo: false
+#| cache: true
+
+# uninsured rate by citizenship
+# visualize citizenship gap
+svyby(~UNINSURED, ~CIT, svy_q2, svymean) |>
+  mutate(
+    pct_uninsured = UNINSURED * 100,
+    ci_lower      = (UNINSURED - 1.96 * se) * 100,
+    ci_upper      = (UNINSURED + 1.96 * se) * 100,
+    CIT           = reorder(CIT, pct_uninsured)
+  ) |>
+  ggplot(aes(x = CIT, y = pct_uninsured,
+             ymin = ci_lower, ymax = ci_upper)) +
+  geom_col(fill = "gray", alpha = 0.8) +
+  geom_errorbar(width = 0.2) +
+  coord_flip() +
+  labs(
+    title    = "Uninsured Rate by Citizenship Status (weighted)",
+    subtitle = "Oregon residents, 2020-2024 ACS 5-Year PUMS",
+    x        = NULL,
+    y        = "% Uninsured"
+  ) +
+  theme_classic()
+```
+
+```{r}
+#| label: q2-fig-povpip
+#| echo: false
+#| cache: true
+#| fig-cap: "Distribution of income-to-poverty ratio by insurance status. Oregon residents, 2020-2024 ACS 5-Year PUMS (unweighted)."
+
+pums_q2 |>
+  filter(!is.na(POVPIP)) |>
+  ggplot(aes(x = POVPIP,
+             fill = factor(UNINSURED, labels = c("Insured", "Uninsured")))) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("Insured" = "#B0B0B0", "Uninsured" = "#E8A0A0")) +
+  labs(
+    title    = "Income-to-Poverty Ratio by Insurance Status",
+    subtitle = "Oregon residents, 2020-2024 ACS 5-Year PUMS (unweighted)",
+    x        = "POVPIP (income as % of poverty line)",
+    y        = "Density",
+    fill     = NULL
+  ) +
+  q2_theme +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: q2-fig-cit-employment
+#| echo: false
+#| cache: true
+#| fig-cap: "Uninsured rate by citizenship status and employment group. Oregon residents, 2020-2024 ACS 5-Year PUMS (weighted). Armed Forces excluded due to small cell sizes."
+
+svyby(~UNINSURED, ~CIT + ESR_group, svy_q2, svymean) |>
+  mutate(pct_uninsured = UNINSURED * 100) |>
+  filter(ESR_group != "Armed Forces") |>
+  mutate(
+    CIT       = str_wrap(as.character(CIT), width = 25),
+    ESR_group = factor(ESR_group,
+                       levels = c("Employed", "Unemployed",
+                                  "Not in labor force", "Under 16"))
+  ) |>
+  ggplot(aes(x = reorder(CIT, pct_uninsured),
+             y = pct_uninsured, fill = ESR_group)) +
+  geom_col(position = "dodge", alpha = 0.9) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c(
+      "Employed"           = "#B0B0B0",
+      "Unemployed"         = "#E8A0A0",
+      "Not in labor force" = "#8BAFC4",
+      "Under 16"           = "#A8C4A0"
+    )
+  ) +
+  labs(
+    title    = "Uninsured Rate by Citizenship and Employment Status",
+    subtitle = "Oregon residents, 2020-2024 ACS 5-Year PUMS (weighted)",
+    x        = NULL,
+    y        = "% Uninsured",
+    fill     = "Employment status"
+  ) +
+  q2_theme +
+  theme(
+    legend.position = "bottom",
+    legend.title    = element_text(size = 9),
+    legend.text     = element_text(size = 8)
+  ) +
+  guides(fill = guide_legend(nrow = 2))
+```
+
 
 ### Q1: Model Selection
 
@@ -710,12 +941,286 @@ selected_df %>%
 In the multiple linear regression model, several predictors show statistically significant associations with income. Education has a strong positive effect, indicating that higher educational attainment is associated with increased income, holding other variables constant. Age exhibits a nonlinear relationship with income, with the quadratic term confirming that earnings increase early in life and level off or decline at older ages. Gender and race also show statistically significant differences, suggesting persistent disparities in income across demographic groups. While the overall explanatory power of the model is modest, these results indicate that key demographic and socioeconomic factors contribute meaningfully to variation in income. The LASSO results support these findings by selecting a similar subset of variables, reinforcing the importance of education, labor supply, and demographic characteristics as key predictors of income.
 
 ## Question2: 
+After conducting exploratory data analysis of citizenship, employment status, and their relationship to insurance coverage, we pose the following question:
 
-### Q2: 
+What is the magnitude of the health insurance coverage gap by citizenship status among Oregon residents, and does this gap persist after adjusting for income, education, employment status, household size, age, race, and Hispanic origin?
 
-### Q2: 
+### Data and Variables for Question 2
+Our data sample uses the full Oregon resident population in pums_clean (n = 197,991), including all ages and labor force statuses. This avoids worker-only restriction, which would underrepresent non-citizens most at risk of uninsurance. Observations missing key variables (HICOV, POVPIP, or CIT) were excluded prior to analysis. 
 
+The response variable is lacking health insurance, coded as a binary integer (1 = uninsured, 0 = insured) by inverting HICOV. It is stored as an integer rather than a logical variable to ensure compatibility with svyby() in the survey package.
 
+Citizenship status (CIT) is the main predictor and is kept in all five categories—U.S.-born, born in Puerto Rico/territories, born abroad to U.S. citizen parents, naturalized citizen, and non-citizen—to capture differences in legal eligibility for coverage.
+
+Income is measured using the income-to-poverty ratio (POVPIP), which is preferred over raw income because eligibility for Medicaid and ACA subsidies is defined relative to the federal poverty line. Education (SCHL) is collapsed into six attainment levels, and employment status (ESR) into five categories to separate labor market effects from citizenship effects.
+
+Household size (NP), age (AGEP), race (RAC1P), and Hispanic origin (HISP_binary) are included as additional controls to adjust for demographic differences across citizenship groups.
+
+### Model Structure
+Two survey-weighted logistic regression models are estimated. The reduced model includes only citizenship status and income-to-poverty ratio, providing a baseline estimate of the raw citizenship coverage gap. The full model adds education, employment status, household size, age, race, and Hispanic origin to adjust for socioeconomic and demographic differences. Comparing the two models shows how much of the citizenship gap is explained by income, education, and other characteristics, and how much remains due to structural and legal barriers to coverage.
+
+### Estimation Method
+Both models are estimated using survey-weighted logistic regression (svyglm) with a quasibinomial family and logit link. The quasibinomial specification allows for overdispersion by estimating a dispersion parameter rather than fixing it at one, producing more reliable standard errors for survey data. The survey design clusters observations by PUMA and applies person weights (PWGTP) to approximate the PUMS sampling structure.
+
+### Model Comparison and Fit
+Model fit is evaluated using quasi-AIC and McFadden’s pseudo $R^2$, both compared to an intercept-only null model. The added contribution of each set of predictors is tested using Wald F-tests (regTermTest()), which is appropriate for survey-weighted models in place of likelihood ratio tests. Multicollinearity is assessed using generalized variance inflation factors (GVIF).
+
+Ridge regression was considered but not used, since the large sample size and relatively small number of predictors make regularization unnecessary, and interpretability of odds ratios is central to the research question on citizenship effects.
+
+### Occupation
+Occupation (OCCP) is excluded from the Q2 model even though it is available in the dataset. It contains over 500 SOC codes, and collapsing them into broad categories introduced ambiguity in classification. More importantly, including occupation would restrict the analysis to employed individuals, reintroducing a labor force bias that the full-population design is intended to avoid. Employment status (ESR_group) is retained instead, as it captures labor market attachment without excluding non-workers.
+
+```{r}
+#| label: q2-full-model
+#| echo: false
+#| cache: true
+
+# Full model
+# All predictors included
+# CIT is focal — all others account for socioeconomic and demographic differences
+
+model_q2_full <- svyglm(
+  UNINSURED ~ CIT + POVPIP + SCHL_group + ESR_group + NP + AGEP + RAC1P + HISP_binary,
+  design = svy_q2,
+  family = quasibinomial(link = "logit")
+)
+
+summary(model_q2_full)
+
+# Odds ratios with 95% CI
+or_full <- exp(cbind(
+  OR    = coef(model_q2_full),
+  lower = coef(model_q2_full) - 1.96 * sqrt(diag(vcov(model_q2_full))),
+  upper = coef(model_q2_full) + 1.96 * sqrt(diag(vcov(model_q2_full)))
+)) |>
+  round(3) |>
+  as.data.frame() |>
+  rownames_to_column("term")
+
+print(or_full)
+
+# Multicollinearity
+vif(model_q2_full)
+```
+```{r}
+#| label: q2-reduced-model
+#| echo: false
+#| cache: true
+
+# Reduced model
+# citizenship + income only
+
+model_q2_reduced <- svyglm(
+  UNINSURED ~ CIT + POVPIP,
+  design = svy_q2,
+  family = quasibinomial(link = "logit")
+)
+
+summary(model_q2_reduced)
+
+or_reduced <- exp(cbind(
+  OR    = coef(model_q2_reduced),
+  lower = coef(model_q2_reduced) - 1.96 * sqrt(diag(vcov(model_q2_reduced))),
+  upper = coef(model_q2_reduced) + 1.96 * sqrt(diag(vcov(model_q2_reduced)))
+)) |>
+  round(3) |>
+  as.data.frame() |>
+  rownames_to_column("term")
+
+print(or_reduced)
+```
+```{r}
+#| label: q2-model-comparison
+#| include: false
+#| cache: true
+
+# Model comparison
+
+# Wald F-tests for each predictor block
+cat("--- Wald F-tests: does each block add beyond CIT + POVPIP? ---\n\n")
+cat("Education:\n");        print(regTermTest(model_q2_full, ~ SCHL_group))
+cat("Employment:\n");       print(regTermTest(model_q2_full, ~ ESR_group))
+cat("Household size:\n");   print(regTermTest(model_q2_full, ~ NP))
+cat("Age:\n");              print(regTermTest(model_q2_full, ~ AGEP))
+cat("Race:\n");             print(regTermTest(model_q2_full, ~ RAC1P))
+cat("Hispanic origin:\n");  print(regTermTest(model_q2_full, ~ HISP_binary))
+
+# quasi-AIC
+cat("\nQuasi-AIC - Reduced:", AIC(model_q2_reduced)[2],
+    "\nQuasi-AIC - Full:   ", AIC(model_q2_full)[2], "\n")
+
+# McFadden pseudo R-squared
+null_model <- svyglm(
+  UNINSURED ~ 1,
+  design    = svy_q2,
+  family    = quasibinomial(link = "logit")
+)
+
+mcfadden_full    <- 1 - deviance(model_q2_full)    / deviance(null_model)
+mcfadden_reduced <- 1 - deviance(model_q2_reduced) / deviance(null_model)
+
+cat("\nMcFadden R^2 - Reduced:", round(mcfadden_reduced, 4),
+    "\nMcFadden R^2 - Full:   ", round(mcfadden_full, 4), "\n")
+
+# key result: how much does the citizenship gap shrink after controls?
+cat("\n--- Citizenship odds ratios: reduced vs full model ---\n")
+
+cit_terms <- paste0("CIT", levels(pums_q2$CIT)[-1])
+
+tibble(
+  citizenship = levels(pums_q2$CIT)[-1],
+  OR_reduced  = or_reduced$OR[or_reduced$term %in% cit_terms],
+  OR_full     = or_full$OR[or_full$term %in% cit_terms],
+  pct_change  = round((OR_full - OR_reduced) / OR_reduced * 100, 1)
+) |>
+  print()
+```
+
+```{r}
+#| label: q2-fig-forest
+#| echo: false
+#| fig-height: 4
+#| fig-width: 7
+
+bind_rows(
+  or_reduced |>
+    filter(str_detect(term, "^CIT")) |>
+    mutate(
+      model       = "Reduced",
+      citizenship = str_remove(term, "^CIT")
+    ),
+  or_full |>
+    filter(str_detect(term, "^CIT")) |>
+    mutate(
+      model       = "Full",
+      citizenship = str_remove(term, "^CIT")
+    )
+) |>
+  mutate(
+    citizenship = str_wrap(citizenship, width = 25),
+    model       = factor(model, levels = c("Reduced", "Full"))
+  ) |>
+  ggplot(aes(x = OR, y = reorder(citizenship, OR),
+             color = model, shape = model)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "gray60") +
+  geom_errorbar(aes(xmin = lower, xmax = upper),
+                width = 0.15, linewidth = 0.7,
+                position = position_dodge(width = 0.5)) +
+  geom_point(size = 4,
+             position = position_dodge(width = 0.5)) +
+  scale_color_manual(
+    values = c("Reduced" = "#6B6B6B", "Full" = "#C0392B"),
+    labels = c("Reduced (CIT + income only)",
+               "Full (all predictors)")
+  ) +
+  scale_shape_manual(
+    values = c("Reduced" = 16, "Full" = 17),
+    labels = c("Reduced (CIT + income only)",
+               "Full (all predictors)")
+  ) +
+  scale_x_log10(breaks = c(0.5, 1, 2, 3, 5, 7),
+                labels = c("0.5", "1", "2", "3", "5", "7")) +
+  labs(
+    title    = "Odds of Being Uninsured by Citizenship Status",
+    subtitle = "Reference: Born in US — Oregon residents, 2020-2024 ACS 5-Year PUMS",
+    x        = "Odds Ratio (log scale)",
+    y        = NULL,
+    color    = "Model",
+    shape    = "Model"
+  ) +
+  q2_theme +
+  theme(
+    legend.position  = "bottom",
+    legend.title     = element_blank(),
+    panel.grid.major.x = element_line(color = "gray90", linewidth = 0.4)
+  ) +
+  guides(color = guide_legend(nrow = 1))
+```
+
+```{r}
+#| label: q2-results-table
+#| echo: false
+#| cache: true
+
+# showing change ratio and significance
+cit_terms <- c("CITNot a US citizen",
+               "CITNaturalized citizen",
+               "CITBorn in PR/territories",
+               "CITBorn abroad of US citizen parent")
+
+or_reduced <- exp(coef(model_q2_reduced))[cit_terms]
+or_full    <- exp(coef(model_q2_full))[cit_terms]
+p_full     <- summary(model_q2_full)$coefficients[cit_terms, "Pr(>|t|)"]
+pct_change <- round((or_full - or_reduced) / or_reduced * 100, 1)
+
+p_fmt <- ifelse(p_full < 0.001, "< 0.001",
+                formatC(p_full, format = "f", digits = 3))
+
+change_fmt <- ifelse(pct_change > 0,
+                     paste0("+", pct_change, "%"),
+                     paste0(pct_change, "%"))
+
+tibble(
+  `Citizenship Status` = c("Not a US citizen",
+                            "Naturalized citizen",
+                            "Born in PR/territories",
+                            "Born abroad of US citizen parent"),
+  `OR (Reduced)`       = round(or_reduced, 2),
+  `OR (Full)`          = round(or_full, 2),
+  `Change`             = change_fmt,
+  `p (Full)`           = p_fmt
+) |>
+  kable(
+    caption  = "Citizenship odds ratios, reduced vs full model (ref: Born in US). Change reflects OR shift after adding socioeconomic controls.",
+    align    = c("l", "c", "c", "c", "c"),
+    booktabs = TRUE
+  ) |>
+  kable_styling(
+    latex_options     = c("striped", "hold_position"),
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width        = FALSE,
+    font_size         = 10
+  ) |>
+  row_spec(1, bold = TRUE)
+
+# Model fit summary
+tibble(
+  Metric          = c("McFadden R²", "Quasi-AIC"),
+  `Reduced Model` = c("0.075", "81,935"),
+  `Full Model`    = c("0.135", "76,687")
+) |>
+  kable(
+    caption  = "Model fit comparison: reduced vs full model.",
+    align    = c("l", "c", "c"),
+    booktabs = TRUE
+  ) |>
+  kable_styling(
+    latex_options     = c("striped", "hold_position"),
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width        = FALSE,
+    font_size         = 10
+  )
+```
+
+### Q2: Results
+The reduced model (citizenship + income) shows a large raw gap: non-citizens have 6.18 times higher odds of being uninsured than U.S.-born residents (95% CI: 4.99–7.64, p < 0.001). Naturalized citizens show a small, borderline elevation (OR = 1.16, p = 0.071).
+
+In the full model, all major predictor blocks significantly improve fit—education (F = 114.8), employment (F = 289.1), age (F = 311.9), race (F = 14.1), and Hispanic origin (F = 5.75), all p < 0.05—except household size (F = 2.86, p = 0.125). Model fit increases (pseudo R²: 0.075 → 0.135).
+
+The citizenship gap remains large even after adjustment: non-citizens still have 4.64 times higher odds of being uninsured (95% CI: 3.88–5.55), and naturalized citizens also remain at higher risk (OR = 1.31, p = 0.007). This indicates that the gap is only partly explained by socioeconomic factors.
+
+Among controls, higher education is strongly protective (graduate degree OR = 0.207), unemployment increases risk (OR = 1.55), and older age reduces it (OR = 0.981 per year). Certain non-working groups have lower odds due to public coverage programs. Some race effects persist, but should be interpreted cautiously given overlap with citizenship and ethnicity.
+
+### Q2: Discussion
+There is a large and persistent citizenship gap in health insurance coverage in Oregon. In the full survey-weighted logistic model, non-citizens have 4.64 times higher odds of being uninsured than U.S.-born residents (OR = 4.64, 95% CI: 3.88–5.55, p < 0.001) after adjusting for income, education, employment, household size, age, race, and Hispanic origin. This represents about a 25% reduction from the reduced model (OR = 6.18), meaning most of the gap is not explained by observable socioeconomic differences. Naturalized citizens also remain at elevated risk (OR = 1.31, p = 0.007), indicating persistent disadvantage even after legal status changes.
+
+Beyond citizenship, the strongest predictors of being uninsured are:
+
+Education shows a strong gradient in coverage: individuals with a graduate degree have substantially lower odds of being uninsured compared to those without a high school diploma (OR = 0.207). Employment status is also important, with unemployed individuals having higher odds of being uninsured (OR = 1.55), although some non-working groups exhibit lower uninsured rates due to eligibility for public programs such as Medicare, Medicaid/CHIP, and military coverage. Age has a modest protective effect, with the likelihood of being uninsured decreasing slightly as age increases (OR ~ 0.981 per year). Race and ethnicity effects are smaller and less stable after adjustment; American Indians remain at elevated risk (OR = 1.48), while Asian residents show lower odds of being uninsured, though these estimates should be interpreted cautiously given multicollinearity among race, ethnicity, and citizenship variables.
+
+The citizenship gap in health insurance coverage is large and remains robust even after controlling for socioeconomic and demographic factors, indicating that it is driven more by structural and legal eligibility constraints than by differences in population composition. Socioeconomic characteristics explain only a small portion of the disparity, with most of the gap persisting after adjustment. Additionally, naturalization does not fully eliminate the elevated risk of being uninsured, suggesting that residual barriers or disadvantages associated with immigrant status continue even after obtaining citizenship.
+
+Policy implications point to eligibility structure—not income or employment—as the primary driver of coverage inequality. Expanding coverage eligibility regardless of immigration status, reducing waiting periods for immigrants, and improving enrollment access for non-citizens are likely more impactful than labor-market or income-based interventions alone.
 
 ## Question3: Can income be predicted from commute time, location, and travel ability?
 

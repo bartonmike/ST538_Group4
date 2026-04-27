@@ -394,7 +394,7 @@ ggplot(pums_clean, aes(x = AGEP, y = PINCP)) +
 
 The above summary statistics indicate that income (PINCP) is highly right-skewed, with a small number of individuals earning substantially more than the median. Because of this skewness, we will consider applying a log transformation to the income response when evaluating model fit for the final report. The scatterplot of income versus age suggests a nonlinear relationship: income tends to increase with age early in life, plateau in middle age, and decline slightly at older ages. This pattern suggests the inclusion of a quadratic age term in the regression model.
 
-Mistiness evaluation showed income variables are structurally missing for children and non-workers, models will subset to relevant populations rather than imputing values.
+Missingness evaluation showed income variables are structurally missing for children and non-workers, models will subset to relevant populations rather than imputing values.
 
 ```{r}
 #| label: eda-incomeved
@@ -403,7 +403,6 @@ ggplot(pums_clean, aes(x = SCHL, y = PINCP)) +
   geom_point(alpha = 0.2) +
   geom_smooth(method = "loess") +
   labs(title = "Income vs Education", x = "Years of School (Education)", y = "Income")
-  
 ```
 
 ```{r}

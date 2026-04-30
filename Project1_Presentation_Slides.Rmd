@@ -1,0 +1,67 @@
+---
+output:
+  beamer_presentation:
+    template: presentation.tex
+---
+
+## Title slide
+
+
+
+## Intro Slide 1
+General overview of our dataset and the census?
+
+
+## Intro Slide 2
+Questions overview
+
+
+## Intro Slide 3
+
+
+
+## Question 1 Slide 1
+
+
+
+## Question 1 Slide 2
+
+
+
+## Question 1 Slide 3
+
+
+
+## Question 2 Slide 1
+
+
+
+## Question 2 Slide 2
+
+
+
+## Question 2 Slide 3
+
+
+
+## Question 3 Slide 1
+
+
+
+## Question 3 Slide 2
+
+
+
+## Obstacles
+
+
+
+## Conclusion
+
+
+
+## Further Directions
+
+
+
+
